@@ -21,8 +21,9 @@ async function connectToMongo() {
 
 connectToMongo();
 const db = client.db('alchemist_test');
-const messagesCollection = db.collection('wa_campaign');
+const messagesCollection = db.collection('wa_messages');
 const contactsCollection = db.collection('wa_contacts');
+const campaignCollection = db.collection('wa_campaign');
 
 // Utility function to generate an alphanumeric code
 function generateAlphanumericCode() {
@@ -84,11 +85,10 @@ app.post('/webhook', async (req, res) => {
     const number = contact.wa_id;
     const wa_name = contact.profile.name;
     const message = messageInfo.text.body;
-    const templateMessage = "Expected template message here"; // replace with actual template if needed
 
-    if (!number || !message) {
-      return res.status(400).json({ error: "Number and message are required" });
-    }
+    // Extract the code from the message, assuming it is sent in the format "code: ABC123"
+    const codeMatch = message.match(/code:\s*(\w+)/i);
+    const code = codeMatch ? codeMatch[1] : generateAlphanumericCode();  // Use the extracted code or generate one if not found
 
     // Check if the number already exists in wa_contacts collection
     let existingContact = await contactsCollection.findOne({ phone: number });
@@ -97,35 +97,28 @@ app.post('/webhook', async (req, res) => {
       existingContact = await contactsCollection.insertOne({
         phone: number,
         name: wa_name,
-        wa_name,
-        createdAt: new Date()
+        wa_name: wa_name,
       });
       console.log("New contact created:", existingContact);
     }
 
-    // Check if the number already exists in wa_campaign collection
-    const existingCampaign = await messagesCollection.findOne({ number });
-    if (existingCampaign) {
-      // Validate the message against the template if required
-      if (existingCampaign.templateMessage !== templateMessage) {
-        return res.status(400).json({ error: "Message does not match the template." });
-      }
-      return res.status(200).json({ message: "Number already exists in the database" });
-    } else {
-      // Create a new entry if the number doesn't exist in wa_campaign
-      const alphanumericCode = generateAlphanumericCode();
-      await messagesCollection.insertOne({
-        number,
-        message,
-        alphanumericCode,
-        templateMessage,
-      });
+    // Insert the message and campaign entries with the extracted code
+    await messagesCollection.insertOne({
+      name: wa_name,
+      code: code,
+    });
 
-      // Send a response to WhatsApp after a successful entry
-      await sendWhatsAppResponse(contact, "Your entry has been successfully created!");
+    await campaignCollection.insertOne({
+      name: wa_name,
+      code: code,
+      description: message,
+    });
 
-      res.status(201).json({ message: "Entry created successfully", alphanumericCode });
-    }
+    // Send a response to WhatsApp after a successful entry
+    await sendWhatsAppResponse(contact, "Your entry has been successfully created!");
+
+    res.status(201).json({ message: "Entry created successfully", code });
+    
   } catch (error) {
     console.error("Error handling webhook:", error);
     res.status(500).json({ error: "Internal server error" });
